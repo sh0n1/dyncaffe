@@ -39,6 +39,7 @@ if __name__ == "__main__":
 
     csc_obj.LoadSwmm(SWMM_inp)
 
+    #csc_obj.plot_Node_DEM  = True # added by sean
     csc_obj.NodeElvCoordChecks()
     csc_obj.InteractionInterval(600)
     # csc_obj.ManholeProp(0.5, 1)
