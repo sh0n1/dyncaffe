@@ -38,5 +38,9 @@ if __name__ == "__main__":
     # view_raster(raster_path3)
     raster_path1 = "./DEMs_1m/brisbane1.tif"
     raster_path2 = "./DEMs_1m/serial_mwd.tif"
+    raster_path3 = "./DEMs_1m/serial_wd.tif"
+    raster_path4 = "./DEMs_1m/serial_wl.tif"
     view_raster(raster_path1)
     view_raster(raster_path2)
+    view_raster(raster_path3)
+    view_raster(raster_path4)

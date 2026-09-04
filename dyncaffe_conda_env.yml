@@ -36,10 +36,11 @@ dependencies:
   - numpy
   - numba
   - rasterio
+  - matplotlib
+  - pytest
+  - colorama
   - pip
   - pip:
-    - pyswmm
-    - swmm-api
-  - pytest
-  - matplotlib
-  - colorama
+      - pyswmm
+      - swmm-api
+      - PyQt6
