@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
         # Persistent configuration panel — not a tab switcher.
         self.sidebar = QWidget()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(320)
+        self.sidebar.setFixedWidth(350)
 
         layout = QVBoxLayout(self.sidebar)
         layout.setContentsMargins(12, 20, 12, 20)
@@ -101,10 +101,43 @@ class MainWindow(QMainWindow):
         Actual backend execution belongs in a separate QThread worker,
         not here — see the multithreading pattern from earlier.
         """
+        import numpy as np
+        from caffe import caffe
+
         self.statusBar().showMessage("Running simulation...")
         # TODO: hand off `config` to a SimulationWorker(QThread), connect
         # its signals to update statusBar() and refresh the tabs once
         # outputs are written.
+
+        try:
+            sim = caffe(config["dem_path"])
+            sim.setConstants(
+                config["hf"],
+                config["increment_constant"],
+                config["ev_threshold"],
+            )
+
+            ev_array = np.array(
+                [[int(r), int(c), float(v)] for r, c, v in config["ev_sources"]]
+            )
+            sim.ExcessVolumeArray(ev_array)
+
+            bc_array = np.array(
+                [[int(r), int(c)] for r, c in config["boundaries"]]
+            )
+            sim.OpenBCArray(bc_array)
+
+            sim.RunSimulation()
+            sim.setOutputPath(config["output_dir"])
+            sim.setOutputName(config["output_name"])
+            sim.CloseSimulation()
+
+            self.statusBar().showMessage("Simulation completed successfully.")
+
+        except Exception as e:
+            self.statusBar().showMessage(f"Simulation failed: {e}")
+            QMessageBox.critical(self, "Simulation Error", str(e))
+ 
 
     def _setup_menu(self):
         menubar = self.menuBar()

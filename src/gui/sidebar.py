@@ -95,7 +95,7 @@ class Sidebar:
 
         add_btn = QPushButton("+ add source")
         add_btn.setFlat(True)
-        add_btn.clicked.connect(lambda: self._add_table_row(self.ev_table, ["", "", ""]))
+        add_btn.clicked.connect(lambda: self._add_table_row(self.ev_table, ["", "", ""], removable=True))
         vbox.addWidget(add_btn)
 
         # Prefill with your known test case values
@@ -111,7 +111,7 @@ class Sidebar:
         vbox = QVBoxLayout(group)
 
         self.bc_table = QTableWidget(0, 2)
-        self.bc_table.setHorizontalHeaderLabels(["Row", "Col"])
+        self.bc_table.setHorizontalHeaderLabels(["Row", "Col", ""])
         vbox.addWidget(self.bc_table)
 
         add_btn = QPushButton("+ add boundary")
@@ -136,9 +136,7 @@ class Sidebar:
             remove_btn = QPushButton("✕")
             remove_btn.setFlat(True)
             remove_btn.clicked.connect(lambda: self._remove_table_row(table, remove_btn))
-            table.setCellWidget(row, table.columnCount() - 1, remove_btn)
-            # Note: if you want a visible remove column, add one extra
-            # column to the table's constructor and header labels above.
+            table.setCellWidget(row, len(values), remove_btn)
 
     def _remove_table_row(self, table, button):
         for row in range(table.rowCount()):
@@ -186,17 +184,18 @@ class Sidebar:
             "hf": float(self.hf_edit.text()),
             "increment_constant": float(self.increment_constant_edit.text()),
             "ev_threshold": float(self.ev_threshold_edit.text()),
-            "ev_sources": self._read_table(self.ev_table),
-            "boundaries": self._read_table(self.bc_table, exclude_last_col=True),
+            "ev_sources": self._read_table(self.ev_table, data_cols=3),
+            "boundaries": self._read_table(self.bc_table, data_cols=2),
         }
 
-    def _read_table(self, table, exclude_last_col=False):
-        cols = table.columnCount() - (1 if exclude_last_col else 0)
+    def _read_table(self, table, data_cols):
+        """Reads back only the actual data columns — explicit, not inferred."""
         rows = []
         for r in range(table.rowCount()):
             row_vals = []
-            for c in range(cols):
+            for c in range(data_cols):
                 item = table.item(r, c)
                 row_vals.append(item.text() if item else "")
             rows.append(row_vals)
         return rows
+    
