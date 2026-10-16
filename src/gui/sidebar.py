@@ -9,17 +9,18 @@ class Sidebar:
     """Builds and manages the configuration sidebar: file I/O, model
     parameters, EV sources, open boundaries, and run controls."""
 
-    def setup(self, parent, layout, run_callback):
+    def setup(self, parent, layout, run_callback, preview_callback):
         self.parent = parent
         self.layout = layout
         self.run_callback = run_callback
+        self.preview_callback = preview_callback
 
         self._build_file_io_section()
         self._build_parameters_section()
         self._build_ev_sources_section()
         self._build_boundaries_section()
         self._build_run_controls()
-
+        
     # ------------------------------------------------------------------
     # File I/O
     # ------------------------------------------------------------------
@@ -46,6 +47,19 @@ class Sidebar:
         self.output_name_edit = QLineEdit("serial")
         form.addRow("Output Name", self.output_name_edit)
 
+        self.satellite_check = QCheckBox("Show satellite basemap (needs internet)")
+        form.addRow(self.satellite_check)
+
+        self.preview_btn = QPushButton("Preview Input DEM")
+        self.preview_btn.setToolTip("Select an input DEM and an output directory first")
+        self.preview_btn.clicked.connect(self._on_preview_clicked)
+        form.addRow(self.preview_btn)
+
+        # Keep the preview button's enabled state in sync with both fields
+        self.dem_path_edit.textChanged.connect(self._update_preview_enabled)
+        self.output_dir_edit.textChanged.connect(self._update_preview_enabled)
+        self._update_preview_enabled()
+
         self.layout.addWidget(group)
 
     def _browse_dem(self):
@@ -60,6 +74,17 @@ class Sidebar:
         path = QFileDialog.getExistingDirectory(self.parent, "Select Output Directory")
         if path:
             self.output_dir_edit.setText(path)
+
+    def _update_preview_enabled(self):
+        """Preview is only available once both a DEM and an output directory are set."""
+        ready = bool(self.dem_path_edit.text().strip()) and bool(self.output_dir_edit.text().strip())
+        self.preview_btn.setEnabled(ready)
+
+    def _on_preview_clicked(self):
+        self.preview_callback(
+            self.dem_path_edit.text().strip(),
+            self.satellite_check.isChecked(),
+        )
 
     # ------------------------------------------------------------------
     # Model parameters
@@ -85,17 +110,27 @@ class Sidebar:
     # ------------------------------------------------------------------
     # Excess volume sources
     # ------------------------------------------------------------------
+    def _make_table(self, headers):
+        """Table with the data columns plus one dedicated column for the remove button."""
+        table = QTableWidget(0, len(headers) + 1)
+        table.setHorizontalHeaderLabels(headers + [""])
+        table.verticalHeader().setVisible(False)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(len(headers), QHeaderView.ResizeMode.ResizeToContents)
+        return table
+    
     def _build_ev_sources_section(self):
         group = QGroupBox("Excess Volume Sources")
         vbox = QVBoxLayout(group)
 
-        self.ev_table = QTableWidget(0, 3)
-        self.ev_table.setHorizontalHeaderLabels(["Row", "Col", "Vol (m³)"])
+        self.ev_table = self._make_table(["Row", "Col", "Vol (m³)"])
         vbox.addWidget(self.ev_table)
 
         add_btn = QPushButton("+ add source")
         add_btn.setFlat(True)
-        add_btn.clicked.connect(lambda: self._add_table_row(self.ev_table, ["", "", ""], removable=True))
+        add_btn.clicked.connect(lambda: self._add_table_row(self.ev_table, ["", "", ""]))
         vbox.addWidget(add_btn)
 
         # Prefill with your known test case values
@@ -110,39 +145,53 @@ class Sidebar:
         group = QGroupBox("Open Boundaries")
         vbox = QVBoxLayout(group)
 
-        self.bc_table = QTableWidget(0, 2)
-        self.bc_table.setHorizontalHeaderLabels(["Row", "Col", ""])
+        self.bc_table = self._make_table(["Row", "Col"])
         vbox.addWidget(self.bc_table)
 
         add_btn = QPushButton("+ add boundary")
         add_btn.setFlat(True)
-        add_btn.clicked.connect(lambda: self._add_table_row(self.bc_table, ["", ""], removable=True))
+        add_btn.clicked.connect(lambda: self._add_table_row(self.bc_table, ["", ""]))
         vbox.addWidget(add_btn)
 
-        self._add_table_row(self.bc_table, ["300", "300"], removable=True)
+        self._add_table_row(self.bc_table, ["300", "300"])
 
         self.layout.addWidget(group)
 
     # ------------------------------------------------------------------
     # Shared table helper
     # ------------------------------------------------------------------
-    def _add_table_row(self, table, values, removable=False):
+    def _add_table_row(self, table, values):
         row = table.rowCount()
         table.insertRow(row)
         for col, value in enumerate(values):
             table.setItem(row, col, QTableWidgetItem(str(value)))
 
-        if removable:
-            remove_btn = QPushButton("✕")
-            remove_btn.setFlat(True)
-            remove_btn.clicked.connect(lambda: self._remove_table_row(table, remove_btn))
-            table.setCellWidget(row, len(values), remove_btn)
+        remove_btn = QPushButton("X")
+        remove_btn.setFlat(True)
+        remove_btn.setToolTip("Remove this row")
+        remove_btn.clicked.connect(lambda: self._remove_table_row(table, remove_btn))
+        table.setCellWidget(row, table.columnCount() - 1, remove_btn)
+
+        self._update_remove_buttons(table)
 
     def _remove_table_row(self, table, button):
+        if table.rowCount() <= 1:  # safety guard: always keep at least one row
+            return
+        last_col = table.columnCount() - 1
         for row in range(table.rowCount()):
-            if table.cellWidget(row, table.columnCount() - 1) is button:
+            if table.cellWidget(row, last_col) is button:
                 table.removeRow(row)
                 break
+        self._update_remove_buttons(table)
+
+    def _update_remove_buttons(self, table):
+        """Remove buttons only appear when there is more than one row."""
+        last_col = table.columnCount() - 1
+        show = table.rowCount() > 1
+        for row in range(table.rowCount()):
+            btn = table.cellWidget(row, last_col)
+            if btn is not None:
+                btn.setVisible(show)
 
     # ------------------------------------------------------------------
     # Run controls

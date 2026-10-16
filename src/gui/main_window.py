@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
-from .tabs import InputDEMTab, MaxWaterDepthTab, WaterLevelTab, WaterDepthTab
+from .tabs import InputDEMTab, SatelliteTab, MaxWaterDepthTab, WaterLevelTab, WaterDepthTab
 from .sidebar import Sidebar
 
 
@@ -64,25 +64,31 @@ class MainWindow(QMainWindow):
             parent=self.sidebar,
             layout=layout,
             run_callback=self._run_simulation,
+            preview_callback=self._preview_dem,
         )
 
     def _create_tabs(self):
-        # Visible tab bar — unlike CorroSim, these are independent raster
+        # Visible tab bar. Unlike CorroSim, these are independent raster
         # views, not app sections driven by the sidebar.
         self.tabs = QTabWidget()
 
         self.input_dem_widget = QWidget()
+        self.satellite_widget = QWidget()
         self.mwd_widget = QWidget()
         self.wl_widget = QWidget()
         self.wd_widget = QWidget()
 
         self.tabs.addTab(self.input_dem_widget, "Input DEM")
+        self.tabs.addTab(self.satellite_widget, "Satellite")
         self.tabs.addTab(self.mwd_widget, "Max Water Depth")
         self.tabs.addTab(self.wl_widget, "Water Level")
         self.tabs.addTab(self.wd_widget, "Water Depth")
 
         self.input_dem_tab = InputDEMTab()
         self.input_dem_tab.setup(parent=self.input_dem_widget)
+
+        self.satellite_tab = SatelliteTab()
+        self.satellite_tab.setup(parent=self.satellite_widget)
 
         self.mwd_tab = MaxWaterDepthTab()
         self.mwd_tab.setup(parent=self.mwd_widget)
@@ -92,6 +98,28 @@ class MainWindow(QMainWindow):
 
         self.wd_tab = WaterDepthTab()
         self.wd_tab.setup(parent=self.wd_widget)
+
+    def _preview_dem(self, dem_path, satellite=False):
+        """Called by the sidebar's Preview button: draw the DEM and its satellite view."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # tile download can take a moment
+        try:
+            dem_warning = self.input_dem_tab.show_dem(dem_path, basemap=satellite)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            self.statusBar().showMessage(f"Could not preview DEM: {e}")
+            QMessageBox.critical(self, "DEM Preview Error", str(e))
+            return
+
+        # A satellite failure (e.g. offline) is non-fatal, so no error dialog
+        try:
+            sat_warning = self.satellite_tab.show_satellite(dem_path)
+        except Exception as e:
+            sat_warning = f"Satellite view failed: {e}"
+        QApplication.restoreOverrideCursor()
+
+        self.tabs.setCurrentIndex(0)
+        warnings = [w for w in (dem_warning, sat_warning) if w]
+        self.statusBar().showMessage(" | ".join(warnings) if warnings else f"Previewing DEM: {dem_path}")
 
     def _run_simulation(self, config):
         """
