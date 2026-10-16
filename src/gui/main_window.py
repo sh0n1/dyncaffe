@@ -4,6 +4,8 @@
 
 """Main Application Window"""
 
+import os
+
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -156,7 +158,8 @@ class MainWindow(QMainWindow):
             sim.OpenBCArray(bc_array)
 
             sim.RunSimulation()
-            sim.setOutputPath(config["output_dir"])
+            output_dir = os.path.join(config["output_dir"], "")  # guarantees a trailing separator
+            sim.setOutputPath(output_dir)
             sim.setOutputName(config["output_name"])
             sim.CloseSimulation()
 
