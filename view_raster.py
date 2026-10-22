@@ -30,7 +30,17 @@ def view_raster(raster_path, title=None):
 
 
 if __name__ == "__main__":
-    raster_path1 = "./tests/serial_mwd.tif"
-    raster_path2 = "./tests/serial_wd.tif"
-    raster_path3 = "./tests/serial_wl.tif"
+    # raster_path1 = "./tests/serial_mwd.tif"
+    # raster_path2 = "./tests/serial_wd.tif"
+    # raster_path3 = "./tests/serial_wl.tif"
+    # view_raster(raster_path1)
+    # view_raster(raster_path2)
+    # view_raster(raster_path3)
+    raster_path1 = "./DEMs_1m/brisbane1.tif"
+    raster_path2 = "./DEMs_1m/serial_mwd.tif"
+    raster_path3 = "./DEMs_1m/serial_wd.tif"
+    raster_path4 = "./DEMs_1m/serial_wl.tif"
+    view_raster(raster_path1)
+    view_raster(raster_path2)
     view_raster(raster_path3)
+    view_raster(raster_path4)

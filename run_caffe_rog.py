@@ -33,7 +33,7 @@ if __name__ == "__main__":
     sim = caffe(input_DEM_file)
     sim.setConstants(hf, increment_constant, EV_threshold)
     sim.readRainfallSeries("./tests/rainfall.csv")
-    sim.EnableParallelRun(4)
+    #sim.EnableParallelRun(4)
     sim.RunSimulationROG()
     sim.setOutputPath("./tests/")
     sim.setOutputName("rog_")
