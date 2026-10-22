@@ -7,7 +7,7 @@ from .base_tab import BaseRasterTab
 
 class SatelliteTab(BaseRasterTab):
     def __init__(self):
-        super().__init__(title="Satellite", subtitle="Preview a DEM to see its satellite view")
+        super().__init__(title="Satellite", subtitle="Click 'Show satellite' to load imagery")
 
     def show_satellite(self, dem_path):
         """Draw satellite imagery covering the DEM's footprint (no DEM data drawn).
@@ -44,6 +44,9 @@ class SatelliteTab(BaseRasterTab):
         ax.set_xlabel("Easting" if crs.is_projected else "Longitude")
         ax.set_ylabel("Northing" if crs.is_projected else "Latitude")
         ax.set_title("Satellite view")
+
+        self._add_rowcol_axes(ax, inverse_transform)
+
         self.canvas.draw_idle()
         return None
 

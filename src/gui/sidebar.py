@@ -4,6 +4,12 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
+import math
+import os
+
+import numpy as np
+import rasterio
+from rasterio.windows import Window
 
 class Sidebar:
     """Builds and manages the configuration sidebar: file I/O, model
@@ -27,6 +33,7 @@ class Sidebar:
     def _build_file_io_section(self):
         group = QGroupBox("File I/O")
         form = QFormLayout(group)
+        self._last_preview = None  # (dem_path, satellite_on) of the last drawn preview
 
         self.dem_path_edit = QLineEdit()
         dem_browse_btn = QPushButton("📁")
@@ -47,18 +54,18 @@ class Sidebar:
         self.output_name_edit = QLineEdit("serial")
         form.addRow("Output Name", self.output_name_edit)
 
-        self.satellite_check = QCheckBox("Show satellite basemap (needs internet)")
-        form.addRow(self.satellite_check)
+        self.satellite_btn = QPushButton("Show satellite")
+        self.satellite_btn.setCheckable(True)
+        self.satellite_btn.setToolTip("Select an input DEM and an output directory first (needs internet)")
+        self.satellite_btn.toggled.connect(self._on_satellite_toggled)
+        form.addRow(self.satellite_btn)
 
-        self.preview_btn = QPushButton("Preview Input DEM")
-        self.preview_btn.setToolTip("Select an input DEM and an output directory first")
-        self.preview_btn.clicked.connect(self._on_preview_clicked)
-        form.addRow(self.preview_btn)
-
-        # Keep the preview button's enabled state in sync with both fields
-        self.dem_path_edit.textChanged.connect(self._update_preview_enabled)
-        self.output_dir_edit.textChanged.connect(self._update_preview_enabled)
-        self._update_preview_enabled()
+        # The DEM preview now draws automatically once both fields are set
+        self.dem_path_edit.textChanged.connect(self._update_satellite_enabled)
+        self.output_dir_edit.textChanged.connect(self._update_satellite_enabled)
+        self.dem_path_edit.editingFinished.connect(self._refresh_preview)
+        self.output_dir_edit.editingFinished.connect(self._refresh_preview)
+        self._update_satellite_enabled()
 
         self.layout.addWidget(group)
 
@@ -68,23 +75,36 @@ class Sidebar:
         )
         if path:
             self.dem_path_edit.setText(path)
-            # TODO: trigger DEM preview load + validation (size warning, etc.)
+            self._refresh_preview()
+            # TODO: DEM size warning (large rasters should be cropped)
 
     def _browse_output_dir(self):
         path = QFileDialog.getExistingDirectory(self.parent, "Select Output Directory")
         if path:
             self.output_dir_edit.setText(path)
+            self._refresh_preview()
 
-    def _update_preview_enabled(self):
-        """Preview is only available once both a DEM and an output directory are set."""
+    def _update_satellite_enabled(self):
+        """The toggle (and the auto-preview) need both a DEM and an output directory."""
         ready = bool(self.dem_path_edit.text().strip()) and bool(self.output_dir_edit.text().strip())
-        self.preview_btn.setEnabled(ready)
+        self.satellite_btn.setEnabled(ready)
 
-    def _on_preview_clicked(self):
-        self.preview_callback(
-            self.dem_path_edit.text().strip(),
-            self.satellite_check.isChecked(),
-        )
+    def _on_satellite_toggled(self, checked):
+        self.satellite_btn.setText("Hide satellite" if checked else "Show satellite")
+        self._refresh_preview()
+
+    def _refresh_preview(self):
+        """Redraw the preview, but only if the DEM or the satellite state actually changed."""
+        dem = self.dem_path_edit.text().strip()
+        out = self.output_dir_edit.text().strip()
+        if not dem or not out:
+            return
+        key = (dem, self.satellite_btn.isChecked())
+        if key == self._last_preview:
+            return
+        self._last_preview = key
+        if self.preview_callback(*key) is False:  # failed to draw, so allow a retry
+            self._last_preview = None
 
     # ------------------------------------------------------------------
     # Model parameters
@@ -209,17 +229,146 @@ class Sidebar:
 
         self.layout.addLayout(row)
 
+    def validate(self):
+        import os
+        """Return a list of problems with the current inputs (empty list = OK)."""
+        problems = []
+
+        if not os.path.isfile(self.dem_path_edit.text().strip()):
+            problems.append("Input DEM: file not found.")
+
+        if not os.path.isdir(self.output_dir_edit.text().strip()):
+            problems.append("Output directory: folder not found.")
+
+        try:
+            float(self.hf_edit.text())
+        except ValueError:
+            problems.append("hf: must be a number.")
+
+        return problems
+    
     def _on_run_clicked(self):
-        # TODO: run validate() here first and show a QMessageBox /
-        # inline warnings before calling run_callback, per your
-        # input-validation user stories.
-        config = self.get_config()
+        problems = self.validate()
+        if problems:
+            shown = problems[:10]
+            text = "\n".join(f"• {p}" for p in shown)
+            if len(problems) > len(shown):
+                text += f"\n…and {len(problems) - len(shown)} more."
+            QMessageBox.warning(self.parent, "Check your inputs", text)
+            return
+
+        config = self.get_config() 
         self.run_callback(config)
 
     def _reset(self):
         # TODO: clear/reset all fields to defaults
         pass
 
+    def set_running(self, running):
+        """Disable the Run button while a simulation is in progress."""
+        self.run_btn.setEnabled(not running)
+        self.run_btn.setText("Running..." if running else "▶ Run Simulation")
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+    def validate(self):
+        """Check every input before a run. Returns a list of problems (empty list = OK)."""
+        problems = []
+        dem_path = self.dem_path_edit.text().strip()
+
+        src = self._open_dem(dem_path, problems)
+        try:
+            self._check_output_settings(problems)
+            self._check_parameters(problems)
+            self._check_cells(problems, "EV source", self._read_table(self.ev_table, 3), src, has_volume=True)
+            self._check_cells(problems, "Open boundary", self._read_table(self.bc_table, 2), src, has_volume=False)
+        finally:
+            if src is not None:
+                src.close()
+        return problems
+
+    def _open_dem(self, dem_path, problems):
+        """Open the DEM for the cell checks. Returns the dataset, or None (with a problem recorded)."""
+        if not dem_path:
+            problems.append("Input DEM: no file selected.")
+            return None
+        if not os.path.isfile(dem_path):
+            problems.append("Input DEM: file not found.")
+            return None
+        try:
+            return rasterio.open(dem_path)
+        except Exception as e:
+            problems.append(f"Input DEM: could not be opened as a raster ({e}).")
+            return None
+
+    def _check_output_settings(self, problems):
+        out_dir = self.output_dir_edit.text().strip()
+        if not out_dir:
+            problems.append("Output directory: no folder selected.")
+        elif not os.path.isdir(out_dir):
+            problems.append("Output directory: folder not found.")
+        elif not os.access(out_dir, os.W_OK):
+            problems.append("Output directory: folder is not writable.")
+
+        name = self.output_name_edit.text().strip()
+        if not name:
+            problems.append("Output name: cannot be blank.")
+        elif any(ch in name for ch in '<>:"/\\|?*'):
+            problems.append('Output name: cannot contain any of < > : " / \\ | ? *')
+
+    def _check_parameters(self, problems):
+        params = (
+            ("hf", self.hf_edit),
+            ("Increment constant", self.increment_constant_edit),
+            ("EV convergence threshold", self.ev_threshold_edit),
+        )
+        for label, edit in params:
+            try:
+                value = float(edit.text())
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError
+            except ValueError:
+                problems.append(f"{label}: must be a number greater than 0.")
+
+    def _check_cells(self, problems, label, rows, src, has_volume):
+        """Check each EV source / boundary row: whole-number cell, inside the DEM, not nodata."""
+        if not rows:
+            problems.append(f"{label}s: at least one is required.")
+            return
+
+        for i, vals in enumerate(rows, start=1):
+            name = f"{label} {i}"
+
+            cell = None
+            try:
+                cell = (int(vals[0]), int(vals[1]))
+            except ValueError:
+                problems.append(f"{name}: row and column must be whole numbers.")
+
+            if has_volume:
+                try:
+                    volume = float(vals[2])
+                    if not math.isfinite(volume) or volume <= 0:
+                        raise ValueError
+                except ValueError:
+                    problems.append(f"{name}: volume must be a number greater than 0.")
+
+            if cell is None or src is None:
+                continue  # nothing more to check without a valid cell and a readable DEM
+
+            r, c = cell
+            if not (0 <= r < src.height and 0 <= c < src.width):
+                problems.append(
+                    f"{name}: cell ({r}, {c}) is outside the DEM "
+                    f"(rows 0-{src.height - 1}, columns 0-{src.width - 1})."
+                )
+                continue
+
+            pixel = np.ma.masked_invalid(src.read(1, window=Window(c, r, 1, 1), masked=True))
+            if np.ma.is_masked(pixel):
+                problems.append(f"{name}: cell ({r}, {c}) has no elevation data (nodata).")
+    
     # ------------------------------------------------------------------
     # Config collection
     # ------------------------------------------------------------------

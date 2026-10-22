@@ -3,6 +3,8 @@
 import math
 
 import rasterio
+import numpy as np
+
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
@@ -38,7 +40,8 @@ class BaseRasterTab(QWidget):
                 fontsize=10, transform=ax.transAxes)
         self.canvas.draw_idle()
 
-    def show_raster(self, path, cmap="viridis", cbar_label="", title=None, basemap=False):
+    def show_raster(self, path, cmap="viridis", cbar_label="", title=None,
+                    basemap=False, mask_below=None):
         """Read band 1 of a GeoTIFF and draw it with a colourbar.
 
         Without a basemap, axes are full-resolution row/column indices.
@@ -59,9 +62,21 @@ class BaseRasterTab(QWidget):
             crs = src.crs
             inverse_transform = ~src.transform
 
+        if mask_below is not None:
+            # Hide dry cells so only flooded cells are coloured
+            data = np.ma.masked_less_equal(data, mask_below)
+            if data.count() == 0:
+                self.figure.clear()
+                ax = self.figure.add_subplot(111)
+                ax.axis("off")
+                ax.text(0.5, 0.5, "No water above the threshold in this output",
+                        ha="center", va="center", transform=ax.transAxes)
+                self.canvas.draw_idle()
+                return None
+
         warning = None
         if basemap and crs is None:
-            warning = "DEM has no CRS, so the satellite basemap was skipped."
+            warning = "Raster has no CRS, so the satellite basemap was skipped."
             basemap = False
 
         self.figure.clear()
@@ -73,7 +88,7 @@ class BaseRasterTab(QWidget):
             im = ax.imshow(data, cmap=cmap, extent=extent, alpha=0.65, zorder=2)
             try:
                 import contextily as cx
-                cx.add_basemap(ax, crs=crs, source=cx.providers.Esri.WorldImagery)
+                cx.add_basemap(ax, crs=crs, source=cx.providers.Esri.WorldImagery, attribution="Imagery © Esri", attribution_size=7)
             except Exception as e:
                 im.set_alpha(1.0)
                 warning = f"Satellite basemap unavailable ({e}). Showing DEM only."
@@ -95,3 +110,24 @@ class BaseRasterTab(QWidget):
         ax.set_title(title or self._title)
         self.canvas.draw_idle()
         return warning
+
+    def _add_rowcol_axes(self, ax, transform, grid=True):
+        """Add Column (top) and Row (right) axes to a map drawn in CRS coordinates.
+        Assumes a north-up raster (no rotation)."""
+        a, c, e, f = transform.a, transform.c, transform.e, transform.f
+
+        col_ax = ax.secondary_xaxis(
+            "top", functions=(lambda x: (x - c) / a, lambda col: col * a + c))
+        row_ax = ax.secondary_yaxis(
+            "right", functions=(lambda y: (y - f) / e, lambda row: row * e + f))
+
+        col_ax.set_xlabel("Column")
+        row_ax.set_ylabel("Row")
+
+        if grid:
+            col_ax.grid(True, color="white", alpha=0.35, linewidth=0.6, linestyle="--")
+            row_ax.grid(True, color="white", alpha=0.35, linewidth=0.6, linestyle="--")
+            
+    def clear(self):
+        """Reset the tab to its placeholder text."""
+        self._show_placeholder()

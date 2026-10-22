@@ -12,6 +12,7 @@ from PyQt6.QtGui import *
 
 from .tabs import InputDEMTab, SatelliteTab, MaxWaterDepthTab, WaterLevelTab, WaterDepthTab
 from .sidebar import Sidebar
+from .worker import SimulationWorker
 
 
 class MainWindow(QMainWindow):
@@ -26,6 +27,9 @@ class MainWindow(QMainWindow):
         # No stylesheet applied yet. A theme.py (GLOBAL_STYLE / DARK_STYLE)
         # can be added later and applied here via self.setStyleSheet(...),
         # following the same pattern CorroSim uses.
+
+        self.last_outputs = None     # paths of the most recent run's rasters
+        self._satellite_on = False   # current state of the sidebar's satellite toggle
 
         self._setup_ui()
         self._setup_menu()
@@ -102,7 +106,10 @@ class MainWindow(QMainWindow):
         self.wd_tab.setup(parent=self.wd_widget)
 
     def _preview_dem(self, dem_path, satellite=False):
-        """Called by the sidebar's Preview button: draw the DEM and its satellite view."""
+        """Called by the sidebar when the DEM/output folder is set or the satellite toggle changes."""
+        new_dem = dem_path != getattr(self, "_previewed_dem", None)
+        self._satellite_on = satellite
+
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # tile download can take a moment
         try:
             dem_warning = self.input_dem_tab.show_dem(dem_path, basemap=satellite)
@@ -110,64 +117,63 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
             self.statusBar().showMessage(f"Could not preview DEM: {e}")
             QMessageBox.critical(self, "DEM Preview Error", str(e))
-            return
+            return False
 
-        # A satellite failure (e.g. offline) is non-fatal, so no error dialog
-        try:
-            sat_warning = self.satellite_tab.show_satellite(dem_path)
-        except Exception as e:
-            sat_warning = f"Satellite view failed: {e}"
+        sat_warning = None
+        if satellite:
+            # A satellite failure (e.g. offline) is non-fatal, so no error dialog
+            try:
+                sat_warning = self.satellite_tab.show_satellite(dem_path)
+            except Exception as e:
+                sat_warning = f"Satellite view failed: {e}"
+        else:
+            self.satellite_tab.clear()
+
+        # Keep the result tabs in step with the toggle. Skipped when a new DEM was just
+        # loaded, since the old outputs don't belong to it.
+        output_warnings = []
+        if not new_dem and self.last_outputs:
+            output_warnings = self._show_outputs(self.last_outputs, satellite)
         QApplication.restoreOverrideCursor()
 
-        self.tabs.setCurrentIndex(0)
-        warnings = [w for w in (dem_warning, sat_warning) if w]
+        self._previewed_dem = dem_path
+        if new_dem:
+            self.tabs.setCurrentIndex(0)  # jump to Input DEM only when a new DEM is loaded
+
+        warnings = [w for w in (dem_warning, sat_warning, *output_warnings) if w]
         self.statusBar().showMessage(" | ".join(warnings) if warnings else f"Previewing DEM: {dem_path}")
+        return True
 
     def _run_simulation(self, config):
-        """
-        Called by the sidebar's Run Simulation button.
-        `config` is a dict of validated inputs the sidebar collects
-        (DEM path, output dir/name, parameters, EV/BC arrays).
-        Actual backend execution belongs in a separate QThread worker,
-        not here — see the multithreading pattern from earlier.
-        """
-        import numpy as np
-        from caffe import caffe
-
+        """Called by the sidebar's Run button: start the simulation on a worker thread."""
+        self.sidebar_controller.set_running(True)
         self.statusBar().showMessage("Running simulation...")
-        # TODO: hand off `config` to a SimulationWorker(QThread), connect
-        # its signals to update statusBar() and refresh the tabs once
-        # outputs are written.
 
-        try:
-            sim = caffe(config["dem_path"])
-            sim.setConstants(
-                config["hf"],
-                config["increment_constant"],
-                config["ev_threshold"],
-            )
+        # Keep a reference on self, otherwise the thread can be garbage-collected mid-run
+        self.worker = SimulationWorker(config, self)
+        self.worker.succeeded.connect(self._on_run_succeeded)
+        self.worker.failed.connect(self._on_run_failed)
+        self.worker.start()
 
-            ev_array = np.array(
-                [[int(r), int(c), float(v)] for r, c, v in config["ev_sources"]]
-            )
-            sim.ExcessVolumeArray(ev_array)
+    def _on_run_succeeded(self, outputs):
+        self.sidebar_controller.set_running(False)
+        self.last_outputs = outputs
 
-            bc_array = np.array(
-                [[int(r), int(c)] for r, c in config["boundaries"]]
-            )
-            sim.OpenBCArray(bc_array)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # tiles may need downloading
+        warnings = self._show_outputs(outputs, self._satellite_on)
+        QApplication.restoreOverrideCursor()
 
-            sim.RunSimulation()
-            output_dir = os.path.join(config["output_dir"], "")  # guarantees a trailing separator
-            sim.setOutputPath(output_dir)
-            sim.setOutputName(config["output_name"])
-            sim.CloseSimulation()
+        self.tabs.setCurrentWidget(self.mwd_widget)  # jump to the headline result
 
-            self.statusBar().showMessage("Simulation completed successfully.")
+        message = "Simulation completed successfully."
+        if warnings:
+            message += " " + " | ".join(warnings)
+        self.statusBar().showMessage(message)
 
-        except Exception as e:
-            self.statusBar().showMessage(f"Simulation failed: {e}")
-            QMessageBox.critical(self, "Simulation Error", str(e))
+    def _on_run_failed(self, message):
+        self.sidebar_controller.set_running(False)
+        self.statusBar().showMessage(f"Simulation failed: {message}")
+        QMessageBox.critical(self, "Simulation Error", message)
  
 
     def _setup_menu(self):
@@ -184,6 +190,18 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
+    def _show_outputs(self, outputs, satellite):
+        """Draw the three result tabs (with or without the satellite basemap). Returns warnings."""
+        warnings = []
+        for tab, key in ((self.mwd_tab, "mwd"), (self.wl_tab, "wl"), (self.wd_tab, "wd")):
+            try:
+                warning = tab.show_output(outputs[key], basemap=satellite)
+                if warning:
+                    warnings.append(warning)
+            except Exception as e:
+                warnings.append(f"Could not display {key}: {e}")
+        return warnings
+    
     def _show_about(self):
         QMessageBox.about(
             self,
@@ -193,4 +211,8 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
+        # Closing mid-run: stop the model process instead of leaving it running
+        worker = getattr(self, "worker", None)
+        if worker is not None and worker.isRunning():
+            worker.cancel()
         event.accept()
