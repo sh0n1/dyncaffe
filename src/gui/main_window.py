@@ -13,6 +13,7 @@ from PyQt6.QtGui import *
 from .tabs import InputDEMTab, SatelliteTab, MaxWaterDepthTab, WaterLevelTab, WaterDepthTab
 from .sidebar import Sidebar
 from .worker import SimulationWorker
+from .theme import GLOBAL_STYLE, SIDEBAR_STYLE
 
 
 class MainWindow(QMainWindow):
@@ -24,9 +25,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 800)
         self.resize(1400, 900)
 
-        # No stylesheet applied yet. A theme.py (GLOBAL_STYLE / DARK_STYLE)
-        # can be added later and applied here via self.setStyleSheet(...),
-        # following the same pattern CorroSim uses.
+        self.setStyleSheet(GLOBAL_STYLE)
 
         self.last_outputs = None     # paths of the most recent run's rasters
         self._satellite_on = False   # current state of the sidebar's satellite toggle
@@ -54,17 +53,21 @@ class MainWindow(QMainWindow):
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setFixedWidth(350)
 
+        self.sidebar.setStyleSheet(SIDEBAR_STYLE)
+
         layout = QVBoxLayout(self.sidebar)
         layout.setContentsMargins(12, 20, 12, 20)
         layout.setSpacing(6)
 
         self.logo_label = QLabel("CAFFE")
+        self.logo_label.setObjectName("logo")
         layout.addWidget(self.logo_label)
         layout.addSpacing(12)
 
         # Sidebar content (file pickers, parameter fields, EV/BC tables,
         # Run button) is built by a dedicated controller populating this
         # container — same pattern as CorroSim's per-tab .setup() calls.
+        
         self.sidebar_controller = Sidebar()
         self.sidebar_controller.setup(
             parent=self.sidebar,

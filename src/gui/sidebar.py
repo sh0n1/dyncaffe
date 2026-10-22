@@ -15,6 +15,15 @@ class Sidebar:
     """Builds and manages the configuration sidebar: file I/O, model
     parameters, EV sources, open boundaries, and run controls."""
 
+    DEFAULTS = {
+        "output_name": "serial",
+        "hf": "0.09",
+        "increment_constant": "1e-4",
+        "ev_threshold": "1e-5",
+        "ev_sources": [["499", "499", "2000"]],
+        "boundaries": [["300", "300"]],
+    }
+
     def setup(self, parent, layout, run_callback, preview_callback):
         self.parent = parent
         self.layout = layout
@@ -51,7 +60,7 @@ class Sidebar:
         output_row.addWidget(output_browse_btn)
         form.addRow("Output Directory", output_row)
 
-        self.output_name_edit = QLineEdit("serial")
+        self.output_name_edit = QLineEdit(self.DEFAULTS["output_name"])
         form.addRow("Output Name", self.output_name_edit)
 
         self.satellite_btn = QPushButton("Show satellite")
@@ -113,15 +122,15 @@ class Sidebar:
         group = QGroupBox("Model Parameters")
         form = QFormLayout(group)
 
-        self.hf_edit = QLineEdit("0.09")
+        self.hf_edit = QLineEdit(self.DEFAULTS["hf"])
         self.hf_edit.setValidator(QDoubleValidator())
         form.addRow("hf — Friction Factor", self.hf_edit)
 
-        self.increment_constant_edit = QLineEdit("1e-4")
+        self.increment_constant_edit = QLineEdit(self.DEFAULTS["increment_constant"])
         self.increment_constant_edit.setValidator(QDoubleValidator())
         form.addRow("Increment Constant (Δ)", self.increment_constant_edit)
 
-        self.ev_threshold_edit = QLineEdit("1e-5")
+        self.ev_threshold_edit = QLineEdit(self.DEFAULTS["ev_threshold"])
         self.ev_threshold_edit.setValidator(QDoubleValidator())
         form.addRow("EV Convergence Threshold", self.ev_threshold_edit)
 
@@ -153,8 +162,9 @@ class Sidebar:
         add_btn.clicked.connect(lambda: self._add_table_row(self.ev_table, ["", "", ""]))
         vbox.addWidget(add_btn)
 
-        # Prefill with your known test case values
-        self._add_table_row(self.ev_table, ["499", "499", "2000"])
+        # default EV sources
+        for values in self.DEFAULTS["ev_sources"]:
+            self._add_table_row(self.ev_table, list(values))
 
         self.layout.addWidget(group)
 
@@ -173,7 +183,8 @@ class Sidebar:
         add_btn.clicked.connect(lambda: self._add_table_row(self.bc_table, ["", ""]))
         vbox.addWidget(add_btn)
 
-        self._add_table_row(self.bc_table, ["300", "300"])
+        for values in self.DEFAULTS["boundaries"]:
+            self._add_table_row(self.bc_table, list(values))
 
         self.layout.addWidget(group)
 
@@ -187,6 +198,8 @@ class Sidebar:
             table.setItem(row, col, QTableWidgetItem(str(value)))
 
         remove_btn = QPushButton("X")
+        remove_btn.setObjectName("removeButton")
+
         remove_btn.setFlat(True)
         remove_btn.setToolTip("Remove this row")
         remove_btn.clicked.connect(lambda: self._remove_table_row(table, remove_btn))
@@ -220,12 +233,14 @@ class Sidebar:
         row = QHBoxLayout()
 
         self.run_btn = QPushButton("▶ Run Simulation")
+        self.run_btn.setObjectName("runButton")
         self.run_btn.clicked.connect(self._on_run_clicked)
         row.addWidget(self.run_btn, 1)
 
-        reset_btn = QPushButton("⟲")
-        reset_btn.clicked.connect(self._reset)
-        row.addWidget(reset_btn)
+        self.reset_btn = QPushButton("⟲")
+        self.reset_btn.setToolTip("Reset parameters to defaults")
+        self.reset_btn.clicked.connect(self._reset)
+        row.addWidget(self.reset_btn)
 
         self.layout.addLayout(row)
 
@@ -254,15 +269,26 @@ class Sidebar:
             text = "\n".join(f"• {p}" for p in shown)
             if len(problems) > len(shown):
                 text += f"\n…and {len(problems) - len(shown)} more."
-            QMessageBox.warning(self.parent, "Check your inputs", text)
+            QMessageBox.warning(self.parent.window(), "Check your inputs", text)
             return
 
         config = self.get_config() 
         self.run_callback(config)
 
     def _reset(self):
-        # TODO: clear/reset all fields to defaults
-        pass
+        """Restore model parameters, EV sources, boundaries and output name to defaults.
+        The input DEM and output directory are left alone."""
+        d = self.DEFAULTS
+        self.output_name_edit.setText(d["output_name"])
+        self.hf_edit.setText(d["hf"])
+        self.increment_constant_edit.setText(d["increment_constant"])
+        self.ev_threshold_edit.setText(d["ev_threshold"])
+
+        for table, rows in ((self.ev_table, d["ev_sources"]),
+                            (self.bc_table, d["boundaries"])):
+            table.setRowCount(0)
+            for values in rows:
+                self._add_table_row(table, list(values))
 
     def set_running(self, running):
         """Disable the Run button while a simulation is in progress."""
